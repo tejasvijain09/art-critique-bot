@@ -1,22 +1,20 @@
+# Use official Python slim image (lightweight)
 FROM python:3.9-slim
 
+# Set working directory inside container
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    software-properties-common \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-#RUN git clone https://github.com/tejasvijain09/art-critique-bot/ .
-
+# Copy app files from your local machine into container
 COPY . .
 
-RUN pip3 install -r requirements.txt
+# Upgrade pip first
+RUN pip install --upgrade pip
 
+# Install Python dependencies from requirements.txt
+RUN pip install -r requirements.txt
+
+# Expose Streamlit's default port
 EXPOSE 8501
 
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
-
+# Command to run the app inside the container
 ENTRYPOINT ["streamlit", "run", "streamlit_art.py", "--server.port=8501", "--server.address=0.0.0.0"]
