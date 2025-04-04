@@ -108,4 +108,4 @@ Analyze artwork using GPT Vision and LLM
 
 This tool is a work in progress. You can contribute to the project on GitHub ([tejasvijain09/art-critique-bot · GitHub](https://github.com/tejasvijain09/art-critique-bot)) with your feedback and suggestions💡.
 
-Created by Eric Blue ([https://tejasvijain.com](https://tejasvijain.com/) & [https://tejasvijain.com](https://tejasvijain.com/)).
+Created by Tejasvi Jain ([https://tejasvijain.com](https://tejasvijain.com/) & [https://tejasvijain.com](https://tejasvijain.com/)).
