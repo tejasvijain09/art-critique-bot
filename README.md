@@ -21,7 +21,7 @@ Can we really use AI as an art critic or expert? Yes and No. This app is a fun e
 
 ## Demo URL
 
-* Github Pages - https://artanalyzer.streamlit.app/ (requires OpenAI API Key)
+* Streamlit - https://art-critique-bot-iubu3ncjq9mar7njrxrcx7.streamlit.app/ (requires OpenAI API Key)
 
 ## Development Environment
 
