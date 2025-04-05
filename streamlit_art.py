@@ -58,20 +58,26 @@ def load_response_json(filename):
         return data
 
 # Extract only the valid JSON portion from a long string containing JSON and other text
-def extract_json(data):
-  decoder = json.JSONDecoder()
-  pos = 0
-  json_str = ""
+import re
 
-  while pos < len(data):
+def extract_json(text):
     try:
-      result, idx = decoder.raw_decode(data[pos:])
-      json_str += data[pos:pos+idx]
-      return json.dumps(result)
-    except json.decoder.JSONDecodeError:
-      pos += 1
+        # Match JSON block inside triple backticks
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if match:
+            return match.group(1)
 
-  return None
+        # Fallback: Try to extract plain JSON block
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if match:
+            return match.group(1)
+
+    except Exception as e:
+        LOGGER.error("Error extracting JSON", exc_info=True)
+
+    return None
+
+
 
 def is_valid_json(string):
     try:
@@ -94,20 +100,29 @@ def is_valid_json(string):
     else:
         return False
 
-def process_response_json(response_json):
+def process_response_json(response_json_raw):
+    try:
+        if isinstance(response_json_raw, dict):
+            return response_json_raw  # already parsed
 
-    # Remove JSON encoding at start and end - e.g. "content": "```json\n{...json string...}\n```"
-    #content_json = response_json["choices"][0]["message"]["content"]
-    content_json = extract_json(response_json["choices"][0]["message"]["content"])
-    LOGGER.debug(content_json)
+        # First attempt
+        return json.loads(response_json_raw)
 
-    # TODO test and fix regex
-    # if not is_valid_json(content_json):
-    #     raise Exception("Invalid JSON response from OpenAI API" + content_json)
+    except json.JSONDecodeError as e:
+        st.warning("⚠️ JSON decoding failed. Attempting to clean and retry...")
+        LOGGER.warning("Initial JSON decode failed: %s", e)
 
-    response_obj = json.loads(content_json)
+        # Attempt to clean the raw response
+        cleaned = re.sub(r'[\x00-\x1f\x7f]', '', response_json_raw)  # remove control characters
+        cleaned = re.sub(r',\s*([}\]])', r'\1', cleaned)  # remove trailing commas
+        cleaned = re.sub(r'\\n', '', cleaned)  # remove escaped newlines
 
-    return response_obj
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e2:
+            LOGGER.error("❌ JSON decode failed after cleaning: %s", e2)
+            st.error("❌ Error while processing response: " + str(e2))
+            return None
 
 # See: https://platform.openai.com/docs/guides/vision
 def analyze_image(uploaded_file, api_key):
@@ -118,98 +133,90 @@ def analyze_image(uploaded_file, api_key):
         "Authorization": f"Bearer {api_key}"
     }
 
-    # Load prompt from file
-    with open('prompts/prompt_overall_analysis_json.txt') as f: prompt = f.read()
+    with open('prompts/prompt_overall_analysis_json.txt') as f:
+        prompt = f.read()
 
     payload = {
-    "model": "gpt-4-vision-preview",
-    "messages": [
-        {
-        "role": "user",
-        "content": [
+        "model": "gpt-4o",
+        "messages": [
             {
-            "type": "text",
-#            "text": prompt + ".  Output the response in JSON format with keys in CamelCase"
-            "text": prompt 
-            },
-            {
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{image_base64}"
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
             }
-            }
-        ]
-        }
-    ],
-    "max_tokens": 3000
+        ],
+        "max_tokens": 3000
     }
-
-    # Sample Response - Chat GPT Completion JSON with choices[0]->messages->content encoded ad JSON
-    # {
-    #   "id": "chatcmpl-8RTetTTSJfwM2Xmm8mTPfwZlL5mDR",
-    #   "object": "chat.completion",
-    #   "created": 1701559555,
-    #   "model": "gpt-4-1106-vision-preview",
-    #   "usage": {
-    #     "prompt_tokens": 1032,
-    #     "completion_tokens": 578,
-    #     "total_tokens": 1610
-    #   },
-    #   "choices": [
-    #     {
-    #       "message": {
-    #         "role": "assistant",
-    #         "content": "```json\n{\n  \"Artwork_Summary\":
 
     if LOAD_LOCAL_JSON:
         st.write("LoadLocalJSON = true")
-        # Load cached JSON response from disk
         response_json = load_response_json("debug/response.json")
 
         if "error" in response_json:
             st.error("OpenAI Error: " + response_json["error"]["message"])
-            raise Exception("OpenAI API error: ", data["error"])
+            raise Exception("OpenAI API error: " + response_json["error"]["message"])
 
-        response_obj = process_response_json(response_json)
-        return response_obj
+        return process_response_json(response_json)
 
     else:
-
-        # Make request with Spinner
         with st.spinner('Making OpenAI request...'):
-            # if DEBUG:
-            #     st.write("Current number of OpenAI requests = ", st.session_state.num_requests)
-
-            # if "MAX_OPENAI_REQUESTS" in os.environ:
-            #     max_openai_requests = int(os.environ["MAX_OPENAI_REQUESTS"])
-
-            #     if st.session_state.num_requests >=  max_openai_requests:
-            #         st.error("Max OpenAI requests exceeded.  You must enter your own OpenAI Key")
-            #         st.session_state['require_openai_api_key'] = True
-            #         st.stop()
-
             response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-            #st.session_state['num_requests'] += 1
 
         while response.status_code == 202:
-            # API processing request
             time.sleep(0.1)
 
-        response_json = response.json()
+        try:
+            response_json = response.json()
+        except Exception as e:
+            st.error("Failed to decode OpenAI response as JSON.")
+            LOGGER.error("JSON Decode Error", exc_info=True)
+            return
+
+        # st.subheader("🔍 Raw OpenAI Response (for debugging)")
+        # st.json(response_json)
 
         if "error" in response_json:
             st.error("OpenAI Error: " + response_json["error"]["message"])
-            #raise Exception("OpenAI API error: ", data["error"])
             st.stop()
 
+        # Save if enabled
         if SAVE_JSON:
-            save_response_json(response_json,"debug/response.json")
+            save_response_json(response_json, "debug/response.json")
 
+        # ✅ Updated JSON extraction logic
         try:
-            response_obj = process_response_json(response_json)
-            return response_obj  
+            message = response_json["choices"][0]["message"]
+            content = message.get("content", "").strip()
+
+            if "I can't help with that" in content or "I'm sorry" in content:
+                st.warning("The model declined to critique this image. Try another image or adjust the prompt.")
+                return
+
+            # Extract only the valid JSON block
+            json_str = extract_json(content)
+
+            if not json_str:
+                st.error("❌ No valid JSON found in the response.")
+                return
+
+            parsed_data = json.loads(json_str)
+            return parsed_data
+
         except Exception as e:
-            LOGGER.error("Error parsing response JSON", exc_info=True)
+            LOGGER.error("Error parsing extracted JSON", exc_info=True)
+            st.error("Error processing and rendering extracted JSON. Reason = " + str(e))
+            return
+
 
 def process_hex_colors(data):
     """
@@ -489,6 +496,8 @@ def render_sidebar():
 
 # Main Streamlit App
 def main():
+    response_obj = None
+
 
     st.title("Art Critique Bot")
     st.header("Analyze artwork using GPT Vision and LLM")
@@ -536,33 +545,36 @@ def main():
 
 
     query_params = st.query_params
-    #st.write(query_params)
 
     # Load example data for preview
-    if 'example' in query_params:
-
-        example = query_params["example"][0]
+    example = None
+    if "example" in query_params and query_params.get("example"):
+        example_list = query_params.get("example")
+        example = example_list[0] if isinstance(example_list, list) else example_list
 
         if example not in examples:
             st.error("Example not found!")
             st.stop()
 
-
-        image_path=examples[example]["image_path"]
+        image_path = examples[example]["image_path"]
         st.write("Loading example... " + image_path)
-        image = Image.open(image_path)
-
-        display_image(image)
 
         try:
+            image = Image.open(image_path)
+            display_image(image)
+
             json_path = examples[example]["json_path"]
             response_json = load_response_json(json_path)
             response_obj = process_response_json(response_json)
+
             render_results(response_obj)
+            return  # <-- stop here so it doesn't proceed to file upload section
+
         except Exception as e:
+            error_msg = str(e)
+            st.error("Error processing and rendering Example JSON results. Reason = " + error_msg)
             LOGGER.error("Top level error handling response", exc_info=True)
-            error_msg = e.args[0]
-            st.error("Error processing and rendering Example JSON results.  Reason = " +  error_msg)
+            st.stop()
 
     # Require OpenAI API key and file upload for processing
     else:
@@ -596,11 +608,16 @@ def main():
 
             try:
                 response_obj = analyze_image(uploaded_file, api_key)
-                render_results(response_obj)
+                if not response_obj or not isinstance(response_obj, dict):
+                    st.error("Invalid response from OpenAI API.")
+                else:
+                    render_results(response_obj)
+
             except Exception as e:
+                error_msg = str(e)
+                st.error("Error processing and rendering JSON results. Reason = " + error_msg)
                 LOGGER.error("Top level error handling response", exc_info=True)
-                error_msg = e.args[0]
-                st.error("Error processing and rendering JSON results. Reason = " +  error_msg)
+
 
 
 
